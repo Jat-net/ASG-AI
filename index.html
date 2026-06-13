@@ -48,6 +48,17 @@
   }
   button:hover { background: #1e5de0; }
   #nameField { display: none; }
+  #loadingOverlay {
+    position: fixed;
+    inset: 0;
+    background: #0b0f1a;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    color: #4a6080;
+    z-index: 99;
+  }
   #chat {
     display: none;
     flex-direction: column;
@@ -63,6 +74,35 @@
     gap: 10px;
     border-bottom: 1px solid #1e2d4a;
   }
+  .topbar-title { flex: 1; }
+  .chat-counter {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 400;
+    color: #7eaaff;
+    background: #0d1525;
+    border: 1px solid #1e2d4a;
+    border-radius: 20px;
+    padding: 3px 10px;
+    white-space: nowrap;
+  }
+  .counter-track {
+    width: 60px;
+    height: 4px;
+    background: #1e2d4a;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .counter-fill {
+    height: 100%;
+    border-radius: 2px;
+    background: #7eaaff;
+    transition: width 0.4s ease, background 0.4s ease;
+  }
+  .counter-fill.warn   { background: #f0a500; }
+  .counter-fill.danger { background: #ff4f4f; }
   .spark {
     font-size: 20px;
     color: #7eaaff;
@@ -70,9 +110,7 @@
     transition: transform 0.3s ease;
     line-height: 1;
   }
-  .spark.loading {
-    animation: breathe 0.9s ease-in-out infinite;
-  }
+  .spark.loading { animation: breathe 0.9s ease-in-out infinite; }
   @keyframes breathe {
     0%, 100% { transform: scale(1); }
     50%       { transform: scale(1.4); }
@@ -103,6 +141,35 @@
     background: #1a2440;
     border-radius: 10px 10px 10px 2px;
   }
+  .msg.limit {
+    background: #2a1a1a;
+    color: #ff7070;
+    max-width: 100%;
+    text-align: center;
+    border-radius: 10px;
+    font-size: 12px;
+  }
+  .link-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: #0d1525;
+    border: 1px solid #2f6fff;
+    color: #7eaaff;
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    margin: 3px 2px 0;
+    text-decoration: none;
+    transition: background 0.15s;
+  }
+  .link-chip:hover { background: #1a2a44; }
+  .search-badge {
+    font-size: 10px;
+    color: #4a6080;
+    margin-bottom: 4px;
+  }
   .inputbar {
     display: flex;
     gap: 6px;
@@ -123,16 +190,14 @@
     width: auto;
   }
   .inputbar input:focus { border-color: #2f6fff; }
+  .inputbar input:disabled { opacity: 0.4; cursor: not-allowed; }
   .inputbar button {
     width: auto;
     padding: 9px 16px;
     margin: 0;
     font-size: 13px;
   }
-  .inputbar button:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
+  .inputbar button:disabled { opacity: 0.4; cursor: not-allowed; }
   .typing-cursor {
     display: inline-block;
     width: 7px;
@@ -149,9 +214,11 @@
 </style>
 </head>
 <body>
- 
+
+<div id="loadingOverlay">Loading...</div>
+
 <!-- LOGIN -->
-<div id="loginBox">
+<div id="loginBox" style="display:none;">
   <h3>ASG AI</h3>
   <input type="email" id="email" placeholder="Email" />
   <div id="nameField">
@@ -162,12 +229,16 @@
   <button onclick="submitAuth()" id="authBtn">Log in</button>
   <p id="authError" style="color:#ff6b6b;font-size:12px;margin:6px 0 0;display:none;"></p>
 </div>
- 
+
 <!-- CHAT -->
 <div id="chat">
   <div class="topbar">
     <span class="spark" id="spark">✦</span>
-    ASG AI
+    <span class="topbar-title">ASG AI</span>
+    <div class="chat-counter">
+      <div class="counter-track"><div class="counter-fill" id="counterFill" style="width:100%"></div></div>
+      <span id="counterLabel">20 chats left</span>
+    </div>
   </div>
   <div class="msgs" id="msgs"></div>
   <div class="inputbar">
@@ -175,7 +246,7 @@
     <button id="sendBtn" onclick="send()">Send</button>
   </div>
 </div>
- 
+
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js";
 import {
@@ -185,7 +256,15 @@ import {
   onAuthStateChanged,
   updateProfile
 } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-auth.js";
- 
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  increment
+} from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
+
 const firebaseConfig = {
   apiKey: "AIzaSyCR7iLqkeQfw9CKZSu3E7w1i1s9reu72bk",
   authDomain: "asg-ai-74f4c.firebaseapp.com",
@@ -194,12 +273,20 @@ const firebaseConfig = {
   messagingSenderId: "841454422363",
   appId: "1:841454422363:web:cc01b300dba688886d327e"
 };
- 
+
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
- 
+const db = getFirestore(app);
+
+const WORKER_URL = "https://ai-gateway.torresjeremiahtorres.workers.dev/";
+const LIMIT = 20;
+const history = [];
+let msgCount = 0;
+let currentUser = null;
 let isSignup = false;
- 
+
+// ---- Auth UI ----
+
 window.showSignup = () => {
   isSignup = !isSignup;
   document.getElementById("nameField").style.display = isSignup ? "block" : "none";
@@ -209,20 +296,20 @@ window.showSignup = () => {
     : "Create an account";
   document.getElementById("authError").style.display = "none";
 };
- 
+
 window.submitAuth = async () => {
   const email = document.getElementById("email").value.trim();
   const password = document.getElementById("password").value;
   const name = document.getElementById("name").value.trim();
   const errEl = document.getElementById("authError");
   errEl.style.display = "none";
- 
+
   if (!email || !password) {
     errEl.textContent = "Please fill in all required fields.";
     errEl.style.display = "block";
     return;
   }
- 
+
   try {
     if (isSignup) {
       if (!name) {
@@ -232,6 +319,13 @@ window.submitAuth = async () => {
       }
       const cred = await createUserWithEmailAndPassword(auth, email, password);
       await updateProfile(cred.user, { displayName: name });
+      // Create Firestore doc for new user
+      await setDoc(doc(db, "users", cred.user.uid), {
+        name,
+        email,
+        chatsUsed: 0,
+        createdAt: new Date().toISOString()
+      });
     } else {
       await signInWithEmailAndPassword(auth, email, password);
     }
@@ -249,17 +343,70 @@ window.submitAuth = async () => {
     errEl.style.display = "block";
   }
 };
- 
-onAuthStateChanged(auth, (user) => {
+
+// ---- Auth state ----
+
+onAuthStateChanged(auth, async (user) => {
+  const overlay = document.getElementById("loadingOverlay");
+
   if (user) {
+    currentUser = user;
+    const userRef = doc(db, "users", user.uid);
+    const snap = await getDoc(userRef);
+
+    if (snap.exists()) {
+      msgCount = snap.data().chatsUsed || 0;
+    } else {
+      // Old account with no doc — create it
+      await setDoc(userRef, {
+        name: user.displayName || "",
+        email: user.email,
+        chatsUsed: 0,
+        createdAt: new Date().toISOString()
+      });
+      msgCount = 0;
+    }
+
+    updateCounter();
+    if (msgCount >= LIMIT) lockChat();
+
+    overlay.style.display = "none";
     document.getElementById("loginBox").style.display = "none";
     document.getElementById("chat").style.display = "flex";
+  } else {
+    overlay.style.display = "none";
+    document.getElementById("loginBox").style.display = "block";
+    document.getElementById("chat").style.display = "none";
   }
 });
- 
-const WORKER_URL = "https://ai-gateway.torresjeremiahtorres.workers.dev/";
-const history = [];
- 
+
+// ---- Counter ----
+
+function updateCounter() {
+  const remaining = Math.max(0, LIMIT - msgCount);
+  const pct = (remaining / LIMIT) * 100;
+  const fill = document.getElementById("counterFill");
+  const label = document.getElementById("counterLabel");
+  fill.style.width = pct + "%";
+  fill.className = "counter-fill" + (pct <= 15 ? " danger" : pct <= 35 ? " warn" : "");
+  label.textContent = remaining + (remaining === 1 ? " chat left" : " chats left");
+}
+
+function lockChat() {
+  document.getElementById("msgInput").disabled = true;
+  document.getElementById("sendBtn").disabled = true;
+  if (!document.querySelector(".msg.limit")) {
+    const msgs = document.getElementById("msgs");
+    const div = document.createElement("div");
+    div.className = "msg limit";
+    div.textContent = "You've used all 20 chats. Come back tomorrow or contact us to get more.";
+    msgs.appendChild(div);
+    msgs.scrollTop = msgs.scrollHeight;
+  }
+}
+
+// ---- Chat ----
+
 function addMsg(role, text) {
   const msgs = document.getElementById("msgs");
   const div = document.createElement("div");
@@ -269,7 +416,41 @@ function addMsg(role, text) {
   msgs.scrollTop = msgs.scrollHeight;
   return div;
 }
- 
+
+function renderAIMessage(text, sources) {
+  const msgs = document.getElementById("msgs");
+  const div = document.createElement("div");
+  div.className = "msg ai";
+  msgs.appendChild(div);
+
+  if (sources && sources.length > 0) {
+    const badge = document.createElement("div");
+    badge.className = "search-badge";
+    badge.textContent = "🔍 searched the web";
+    div.appendChild(badge);
+  }
+
+  const textNode = document.createElement("span");
+  div.appendChild(textNode);
+
+  if (sources && sources.length > 0) {
+    const linksWrap = document.createElement("div");
+    sources.forEach(s => {
+      const a = document.createElement("a");
+      a.className = "link-chip";
+      a.href = s.url;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = "↗ " + (s.title || s.url);
+      linksWrap.appendChild(a);
+    });
+    div.appendChild(linksWrap);
+  }
+
+  msgs.scrollTop = msgs.scrollHeight;
+  return textNode;
+}
+
 function typewrite(el, text, onDone) {
   let i = 0;
   const cursor = document.createElement("span");
@@ -287,39 +468,54 @@ function typewrite(el, text, onDone) {
     }
   }, 18);
 }
- 
+
 window.send = async () => {
+  if (msgCount >= LIMIT) return;
   const input = document.getElementById("msgInput");
   const sendBtn = document.getElementById("sendBtn");
   const spark = document.getElementById("spark");
   const msg = input.value.trim();
   if (!msg) return;
- 
+
+  // Increment in Firestore first — this is the real gate
+  const userRef = doc(db, "users", currentUser.uid);
+  try {
+    await updateDoc(userRef, { chatsUsed: increment(1) });
+  } catch (e) {
+    addMsg("ai", "Error saving your usage. Try again.");
+    return;
+  }
+
+  msgCount++;
+  updateCounter();
+
   addMsg("user", msg);
   history.push({ role: "user", content: msg });
   input.value = "";
   sendBtn.disabled = true;
   spark.classList.add("loading");
- 
+
   try {
     const res = await fetch(WORKER_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: msg, history })
     });
- 
+
     const data = await res.json();
     spark.classList.remove("loading");
     const reply = data.reply || "No response.";
+    const sources = data.sources || [];
     history.push({ role: "assistant", content: reply });
-    const el = addMsg("ai", "");
-    typewrite(el, reply, () => {
-      sendBtn.disabled = false;
+    const textNode = renderAIMessage(reply, sources);
+    typewrite(textNode, reply, () => {
+      if (msgCount >= LIMIT) lockChat();
+      else sendBtn.disabled = false;
     });
   } catch (err) {
     spark.classList.remove("loading");
     addMsg("ai", "Error: could not reach the server.");
-    sendBtn.disabled = false;
+    if (msgCount < LIMIT) sendBtn.disabled = false;
   }
 };
 </script>
