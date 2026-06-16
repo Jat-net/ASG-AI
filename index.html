@@ -449,7 +449,7 @@ function lockChat() {
     const msgs = document.getElementById("msgs");
     const div = document.createElement("div");
     div.className = "msg limit";
-    div.textContent = "You've used all 20 chats. Come back tomorrow or contact us to get more.";
+    div.textContent = "You've hit the 20 chat limit. Try again in a few hours.";
     msgs.appendChild(div);
     msgs.scrollTop = msgs.scrollHeight;
   }
