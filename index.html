@@ -107,10 +107,16 @@
     border-radius: 3px;
     background: #2f6fff;
     transition: width 0.5s ease, background 0.5s ease;
-    width: 100%;
+    width: 0%;
   }
   .progress-fill.warn   { background: #f0a500; }
   .progress-fill.danger { background: #ff4f4f; }
+  .reset-timer {
+    font-size: 10px;
+    color: #4a6080;
+    margin-top: 3px;
+    display: none;
+  }
   /* ---- MESSAGES ---- */
   .msgs {
     flex: 1;
@@ -302,6 +308,7 @@
     <div class="progress-track">
       <div class="progress-fill" id="counterFill" style="width:0%"></div>
     </div>
+    <div class="reset-timer" id="resetTimer"></div>
   </div>
   <div class="msgs" id="msgs"></div>
   <div class="inputbar">
@@ -323,9 +330,7 @@ import {
   getFirestore,
   doc,
   getDoc,
-  setDoc,
-  updateDoc,
-  increment
+  setDoc
 } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -342,11 +347,18 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 
 const WORKER_URL = "https://ai-gateway.torresjeremiahtorres.workers.dev/";
-const LIMIT = 20;
-const history = [];
+
+// These now live server-side (in the Worker/KV) and get pulled
+// down from there. Local values are just for rendering.
 let msgCount = 0;
+let LIMIT = 20;
+let resetAt = null;
+let isAdmin = false;
+
+const history = [];
 let currentUser = null;
 let isSignup = false;
+let countdownInterval = null;
 
 // ---- Auth UI ----
 
@@ -382,8 +394,10 @@ window.submitAuth = async () => {
       }
       const cred = await createUserWithEmailAndPassword(auth, email, password);
       await updateProfile(cred.user, { displayName: name });
+      // chatsUsed kept here only for legacy/reference - the Worker's
+      // KV store is the real source of truth for limits now.
       await setDoc(doc(db, "users", cred.user.uid), {
-        name, email, chatsUsed: 0,
+        name, email,
         createdAt: new Date().toISOString()
       });
     } else {
@@ -408,19 +422,19 @@ onAuthStateChanged(auth, async (user) => {
   const overlay = document.getElementById("loadingOverlay");
   if (user) {
     currentUser = user;
+
     const userRef = doc(db, "users", user.uid);
     const snap = await getDoc(userRef);
-    if (snap.exists()) {
-      msgCount = snap.data().chatsUsed || 0;
-    } else {
+    if (!snap.exists()) {
       await setDoc(userRef, {
         name: user.displayName || "", email: user.email,
-        chatsUsed: 0, createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString()
       });
-      msgCount = 0;
     }
-    updateCounter();
-    if (msgCount >= LIMIT) lockChat();
+
+    // Pull the REAL usage/reset data from the Worker (server-side, KV-backed).
+    await refreshStatus();
+
     overlay.style.display = "none";
     document.getElementById("loginBox").style.display = "none";
     document.getElementById("chat").style.display = "flex";
@@ -431,15 +445,92 @@ onAuthStateChanged(auth, async (user) => {
   }
 });
 
+// ---- Status / usage sync ----
+
+async function refreshStatus() {
+  try {
+    const res = await fetch(WORKER_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        uid: currentUser.uid,
+        email: currentUser.email,
+        action: "status"
+      })
+    });
+    const data = await res.json();
+    applyUsage(data);
+  } catch (err) {
+    // If the status check fails, fail safe: don't lock the user out,
+    // just show unknown state. The Worker still enforces the real
+    // limit on every actual send.
+    console.error("Status check failed:", err);
+  }
+}
+
+function applyUsage(data) {
+  if (typeof data.count === "number") msgCount = data.count;
+  if (typeof data.limit === "number") LIMIT = data.limit;
+  if (data.resetAt) resetAt = data.resetAt;
+  isAdmin = !!data.isAdmin;
+
+  updateCounter();
+  startCountdown();
+
+  if (!isAdmin && msgCount >= LIMIT) {
+    lockChat();
+  } else {
+    unlockChat();
+  }
+}
+
 // ---- Counter ----
 
 function updateCounter() {
-  const pct = (msgCount / LIMIT) * 100;
+  const pct = Math.min((msgCount / LIMIT) * 100, 100);
   const fill = document.getElementById("counterFill");
   const label = document.getElementById("counterLabel");
   fill.style.width = pct + "%";
   fill.className = "progress-fill" + (pct >= 85 ? " danger" : pct >= 65 ? " warn" : "");
-  label.textContent = msgCount + " / " + LIMIT;
+  label.textContent = isAdmin ? "Unlimited (admin)" : (msgCount + " / " + LIMIT);
+}
+
+function formatTimeLeft(ms) {
+  if (ms <= 0) return "resetting...";
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function startCountdown() {
+  const timerEl = document.getElementById("resetTimer");
+  if (countdownInterval) clearInterval(countdownInterval);
+
+  if (isAdmin || !resetAt) {
+    timerEl.style.display = "none";
+    return;
+  }
+
+  timerEl.style.display = "block";
+
+  const tick = () => {
+    const msLeft = resetAt - Date.now();
+    if (msLeft <= 0) {
+      timerEl.textContent = "Limit resets now — refreshing...";
+      clearInterval(countdownInterval);
+      // Pull fresh state from the Worker, which will do the actual reset.
+      refreshStatus();
+      return;
+    }
+    timerEl.textContent = "Resets in " + formatTimeLeft(msLeft);
+  };
+
+  tick();
+  countdownInterval = setInterval(tick, 1000);
 }
 
 function lockChat() {
@@ -449,10 +540,17 @@ function lockChat() {
     const msgs = document.getElementById("msgs");
     const div = document.createElement("div");
     div.className = "msg limit";
-    div.textContent = "You've hit the 20 chat limit. Try again in a few hours.";
+    div.textContent = "You've hit the 20 chat limit. Check the timer above for when it resets.";
     msgs.appendChild(div);
     msgs.scrollTop = msgs.scrollHeight;
   }
+}
+
+function unlockChat() {
+  const limitMsg = document.querySelector(".msg.limit");
+  if (limitMsg) limitMsg.remove();
+  document.getElementById("msgInput").disabled = false;
+  if (!window.isSending) document.getElementById("sendBtn").disabled = false;
 }
 
 // ---- Typing bubble ----
@@ -568,23 +666,13 @@ function typewrite(el, text, onDone) {
 // ---- Send ----
 
 window.send = async () => {
-  if (msgCount >= LIMIT || window.isSending) return;
+  if ((!isAdmin && msgCount >= LIMIT) || window.isSending) return;
   window.isSending = true;
   const input = document.getElementById("msgInput");
   const sendBtn = document.getElementById("sendBtn");
   const msg = input.value.trim();
   if (!msg) { window.isSending = false; return; }
 
-  const userRef = doc(db, "users", currentUser.uid);
-  try {
-    await updateDoc(userRef, { chatsUsed: increment(1) });
-  } catch (e) {
-    addMsg("ai", "Error saving your usage. Try again.");
-    return;
-  }
-
-  msgCount++;
-  updateCounter();
   addMsg("user", msg);
   history.push({ role: "user", content: msg });
   input.value = "";
@@ -595,26 +683,42 @@ window.send = async () => {
     const res = await fetch(WORKER_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: msg, history })
+      body: JSON.stringify({
+        uid: currentUser.uid,
+        email: currentUser.email,
+        history
+      })
     });
 
     const data = await res.json();
     hideTypingBubble();
+
+    if (res.status === 403 && data.error === "CHAT_LIMIT_REACHED") {
+      applyUsage(data);
+      window.isSending = false;
+      return;
+    }
+
     const reply = data.reply || "No response.";
     const sources = data.sources || [];
     const quizData = data.quiz || null;
     history.push({ role: "assistant", content: reply });
+
+    // The Worker is the only thing that increments the count.
+    // We just reflect whatever it tells us back.
+    applyUsage(data);
+
     const textNode = renderAIMessage(reply, sources, quizData);
     typewrite(textNode, reply, () => {
       window.isSending = false;
-      if (msgCount >= LIMIT) lockChat();
+      if (!isAdmin && msgCount >= LIMIT) lockChat();
       else sendBtn.disabled = false;
     });
   } catch (err) {
     hideTypingBubble();
     addMsg("ai", "Error: could not reach the server.");
     window.isSending = false;
-    if (msgCount < LIMIT) sendBtn.disabled = false;
+    if (isAdmin || msgCount < LIMIT) sendBtn.disabled = false;
   }
 };
 </script>
