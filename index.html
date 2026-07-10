@@ -377,6 +377,8 @@ window.doLogout = async () => {
   isAdmin = false;
   await signOut(auth);
 };
+
+window.showSignup = () => {
   isSignup = !isSignup;
   document.getElementById("nameField").style.display = isSignup ? "block" : "none";
   document.getElementById("authBtn").textContent = isSignup ? "Sign up" : "Log in";
