@@ -298,7 +298,7 @@
 <!-- CHAT -->
 <div id="chat">
   <div class="topbar">
-    <span class="spark" id="spark">✦</span>
+    <span class="spark" id="spark">*</span>
     <span class="topbar-title">ASG AI</span>
   </div>
   <div class="progress-wrap">
@@ -562,7 +562,7 @@ function showTypingBubble() {
   bubble.className = "typing-bubble";
   bubble.id = "typingBubble";
   bubble.innerHTML = `
-    <span class="bubble-icon">✦</span>
+    <span class="bubble-icon">*</span>
     <div class="bubble-dots">
       <span></span><span></span><span></span>
     </div>`;
@@ -596,7 +596,7 @@ function renderAIMessage(text, sources, quizData) {
   if (sources && sources.length > 0) {
     const badge = document.createElement("div");
     badge.className = "search-badge";
-    badge.textContent = "🔍 searched the web";
+    badge.textContent = "searched the web";
     div.appendChild(badge);
   }
 
