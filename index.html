@@ -587,6 +587,38 @@ function addMsg(role, text) {
   return div;
 }
 
+function renderQuizFollowup(messageDiv, chosenOption, wasCorrect, quizData) {
+  const followup = document.createElement("div");
+  followup.className = "quiz-wrap";
+
+  const continueBtn = document.createElement("button");
+  continueBtn.className = "quiz-btn";
+  continueBtn.textContent = "Continue quiz";
+  continueBtn.onclick = () => {
+    followup.querySelectorAll("button").forEach(b => b.disabled = true);
+    requestAIResponse(
+      "(continue) Give me another quiz question, same topic as before.",
+      { displayUser: false }
+    );
+  };
+
+  const stopBtn = document.createElement("button");
+  stopBtn.className = "quiz-btn";
+  stopBtn.textContent = "Don't continue";
+  stopBtn.onclick = () => {
+    followup.querySelectorAll("button").forEach(b => b.disabled = true);
+    requestAIResponse(
+      `(stop) I don't want to continue with quizzes. I selected "${chosenOption}", which was ${wasCorrect ? "correct" : "incorrect"}. Please comment on my answer and do not generate another quiz question.`,
+      { displayUser: false }
+    );
+  };
+
+  followup.appendChild(continueBtn);
+  followup.appendChild(stopBtn);
+  messageDiv.appendChild(followup);
+  document.getElementById("msgs").scrollTop = document.getElementById("msgs").scrollHeight;
+}
+
 function renderAIMessage(text, sources, quizData) {
   const msgs = document.getElementById("msgs");
   const div = document.createElement("div");
@@ -622,10 +654,8 @@ function renderAIMessage(text, sources, quizData) {
           btn.textContent += " ✗";
           wrap.querySelectorAll(".quiz-btn")[quizData.answer].classList.add("correct");
         }
-        // Record what the user actually picked in the conversation history so
-        // the model has real context if asked about it later (e.g. "which
-        // question/answer did I pick"). Without this the model has no idea
-        // quiz buttons were even clicked.
+        // Record what the user picked in history (silently — no chat bubble)
+        // so the model has real context if asked about it later.
         history.push({
           role: "user",
           content: `I selected "${opt}" for the question "${quizData.question || ''}".`
@@ -633,9 +663,11 @@ function renderAIMessage(text, sources, quizData) {
         history.push({
           role: "assistant",
           content: wasCorrect
-            ? `That's correct! The answer was "${quizData.options[quizData.answer]}".`
-            : `Not quite. The correct answer was "${quizData.options[quizData.answer]}".`
+            ? `Correct! The answer was "${quizData.options[quizData.answer]}".`
+            : `Incorrect. The correct answer was "${quizData.options[quizData.answer]}".`
         });
+
+        renderQuizFollowup(div, opt, wasCorrect, quizData);
       };
       wrap.appendChild(btn);
     });
@@ -681,17 +713,13 @@ function typewrite(el, text, onDone) {
 
 // ---- Send ----
 
-window.send = async () => {
+async function requestAIResponse(userMessageContent, { displayUser = true } = {}) {
   if ((!isAdmin && msgCount >= LIMIT) || window.isSending) return;
   window.isSending = true;
-  const input = document.getElementById("msgInput");
   const sendBtn = document.getElementById("sendBtn");
-  const msg = input.value.trim();
-  if (!msg) { window.isSending = false; return; }
 
-  addMsg("user", msg);
-  history.push({ role: "user", content: msg });
-  input.value = "";
+  if (displayUser) addMsg("user", userMessageContent);
+  history.push({ role: "user", content: userMessageContent });
   sendBtn.disabled = true;
   showTypingBubble();
 
@@ -721,8 +749,6 @@ window.send = async () => {
     if (quizData) quizData.question = reply;
     history.push({ role: "assistant", content: reply });
 
-    // The Worker is the only thing that increments the count.
-    // We just reflect whatever it tells us back.
     applyUsage(data);
 
     const textNode = renderAIMessage(reply, sources, quizData);
@@ -737,6 +763,14 @@ window.send = async () => {
     window.isSending = false;
     if (isAdmin || msgCount < LIMIT) sendBtn.disabled = false;
   }
+}
+
+window.send = async () => {
+  const input = document.getElementById("msgInput");
+  const msg = input.value.trim();
+  if (!msg) return;
+  input.value = "";
+  await requestAIResponse(msg, { displayUser: true });
 };
 </script>
 </body>
