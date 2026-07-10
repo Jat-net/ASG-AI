@@ -613,7 +613,8 @@ function renderAIMessage(text, sources, quizData) {
       btn.textContent = opt;
       btn.onclick = () => {
         wrap.querySelectorAll(".quiz-btn").forEach(b => b.disabled = true);
-        if (i === quizData.answer) {
+        const wasCorrect = i === quizData.answer;
+        if (wasCorrect) {
           btn.classList.add("correct");
           btn.textContent += " ✓";
         } else {
@@ -621,6 +622,20 @@ function renderAIMessage(text, sources, quizData) {
           btn.textContent += " ✗";
           wrap.querySelectorAll(".quiz-btn")[quizData.answer].classList.add("correct");
         }
+        // Record what the user actually picked in the conversation history so
+        // the model has real context if asked about it later (e.g. "which
+        // question/answer did I pick"). Without this the model has no idea
+        // quiz buttons were even clicked.
+        history.push({
+          role: "user",
+          content: `I selected "${opt}" for the question "${quizData.question || ''}".`
+        });
+        history.push({
+          role: "assistant",
+          content: wasCorrect
+            ? `That's correct! The answer was "${quizData.options[quizData.answer]}".`
+            : `Not quite. The correct answer was "${quizData.options[quizData.answer]}".`
+        });
       };
       wrap.appendChild(btn);
     });
@@ -703,6 +718,7 @@ window.send = async () => {
     const reply = data.reply || "No response.";
     const sources = data.sources || [];
     const quizData = data.quiz || null;
+    if (quizData) quizData.question = reply;
     history.push({ role: "assistant", content: reply });
 
     // The Worker is the only thing that increments the count.
