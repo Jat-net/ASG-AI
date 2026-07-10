@@ -300,6 +300,7 @@
   <div class="topbar">
     <span class="spark" id="spark">*</span>
     <span class="topbar-title">ASG AI</span>
+    <button id="logoutBtn" onclick="doLogout()" style="width:auto;margin:0;padding:6px 10px;font-size:11px;">Log out</button>
   </div>
   <div class="progress-wrap">
     <div class="progress-row">
@@ -325,7 +326,8 @@ import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   onAuthStateChanged,
-  updateProfile
+  updateProfile,
+  signOut
 } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-auth.js";
 import {
   getFirestore,
@@ -363,7 +365,18 @@ let countdownInterval = null;
 
 // ---- Auth UI ----
 
-window.showSignup = () => {
+window.doLogout = async () => {
+  if (countdownInterval) clearInterval(countdownInterval);
+  // Clear local session state so switching accounts doesn't leak the
+  // previous user's chat history or quiz context into the next login.
+  history.length = 0;
+  document.getElementById("msgs").innerHTML = "";
+  msgCount = 0;
+  LIMIT = 20;
+  resetAt = null;
+  isAdmin = false;
+  await signOut(auth);
+};
   isSignup = !isSignup;
   document.getElementById("nameField").style.display = isSignup ? "block" : "none";
   document.getElementById("authBtn").textContent = isSignup ? "Sign up" : "Log in";
@@ -730,6 +743,7 @@ async function requestAIResponse(userMessageContent, { displayUser = true } = {}
       body: JSON.stringify({
         uid: currentUser.uid,
         email: currentUser.email,
+        name: currentUser.displayName || "",
         history
       })
     });
