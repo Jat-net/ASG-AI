@@ -451,6 +451,11 @@ onAuthStateChanged(auth, async (user) => {
     // Pull the REAL usage/reset data from the Worker (server-side, KV-backed).
     await refreshStatus();
 
+    // Load this account's saved chats from Firestore through the Worker.
+    // The Worker is the source of truth for saved history, so the same chats
+    // appear again after logging out and back in.
+    await loadChatHistory();
+
     overlay.style.display = "none";
     document.getElementById("loginBox").style.display = "none";
     document.getElementById("chat").style.display = "flex";
@@ -460,6 +465,44 @@ onAuthStateChanged(auth, async (user) => {
     document.getElementById("chat").style.display = "none";
   }
 });
+
+// ---- Saved chat history ----
+
+async function loadChatHistory() {
+  const msgs = document.getElementById("msgs");
+  msgs.innerHTML = "";
+  history.length = 0;
+
+  try {
+    const res = await fetch(WORKER_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        uid: currentUser.uid,
+        email: currentUser.email,
+        action: "history"
+      })
+    });
+
+    if (!res.ok) throw new Error("History request failed");
+
+    const data = await res.json();
+    const saved = Array.isArray(data.history) ? data.history : [];
+
+    // Keep the loaded messages as model context too.
+    saved.forEach(message => {
+      if (!message || !["user", "assistant"].includes(message.role)) return;
+      if (typeof message.content !== "string") return;
+
+      history.push({ role: message.role, content: message.content });
+      addMsg(message.role === "assistant" ? "ai" : "user", message.content);
+    });
+
+    msgs.scrollTop = msgs.scrollHeight;
+  } catch (err) {
+    console.error("Could not load saved chat history:", err);
+  }
+}
 
 // ---- Status / usage sync ----
 
